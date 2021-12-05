@@ -277,6 +277,16 @@ guess_mime_type(char *filename)
     return "text/plain";
 }
 
+/** Helper that both parses and checks the string for invalid mutations. */
+/*static int path_parse(char* string, size_t size, const char* source1, const char)
+{
+    for (int i = 0; i < size)
+    {
+
+    }
+}*/
+
+
 /* Handle HTTP transaction for static files. */
 static bool
 handle_static_asset(struct http_transaction *ta, char *basedir)
@@ -286,7 +296,22 @@ handle_static_asset(struct http_transaction *ta, char *basedir)
     char *req_path = bufio_offset2ptr(ta->client->bufio, ta->req_path);
     // The code below is vulnerable to an attack.  Can you see
     // which?  Fix it to avoid indirect object reference (IDOR) attacks.
-    snprintf(fname, sizeof fname, "%s%s", basedir, req_path);
+
+    // if the base directory is null, just use the request path.
+    if (basedir == NULL)
+    {
+        snprintf(fname, sizeof fname, "%s", req_path);
+    }
+    else
+    {
+        snprintf(fname, sizeof fname, "%s%s", basedir, req_path);
+    }
+    // If a bad sequence was found
+    if (strstr(req_path, ".."))
+    {
+        printf("ERROR: User attempted to use special path character sequences.\n"); // Error reporting for server.
+        return send_not_found(ta); // Send not found.
+    }
 
     if (access(fname, R_OK)) {
         if (errno == EACCES)
@@ -298,10 +323,12 @@ handle_static_asset(struct http_transaction *ta, char *basedir)
     // Determine file size
     struct stat st;
     int rc = stat(fname, &st);
+    
     if (rc == -1)
         return send_error(ta, HTTP_INTERNAL_ERROR, "Could not stat file.");
 
-    int filefd = open(fname, O_RDONLY);
+    
+    int filefd = open(fname, O_RDONLY); // File reading seems to be bugged here... why?
     if (filefd == -1) {
         return send_not_found(ta);
     }
@@ -329,7 +356,7 @@ out:
 static bool
 handle_api(struct http_transaction *ta)
 {
-    return send_error(ta, HTTP_NOT_FOUND, "API not implemented");
+    return send_error(ta, HTTP_NOT_FOUND, "API not implemented"); // TODO!!!
 }
 
 /* Set up an http client, associating it with a bufio buffer. */
@@ -359,12 +386,12 @@ http_handle_transaction(struct http_client *self)
             return false;
 
         // To see the body, use this:
-        // char *body = bufio_offset2ptr(ta.client->bufio, ta.req_body);
-        // hexdump(body, ta.req_content_len);
+        char *body = bufio_offset2ptr(ta.client->bufio, ta.req_body);
+        hexdump(body, ta.req_content_len);
     }
 
     buffer_init(&ta.resp_headers, 1024);
-    http_add_header(&ta.resp_headers, "Server", "CS3214-Personal-Server");
+    http_add_header(&ta.resp_headers, "Server", "CS3214-Personal-Server"); // Custom server name
     buffer_init(&ta.resp_body, 0);
 
     bool rc = false;
@@ -373,7 +400,7 @@ http_handle_transaction(struct http_client *self)
         rc = handle_api(&ta);
     } else
     if (STARTS_WITH(req_path, "/private")) {
-        /* not implemented */
+        /* not implemented */   // TODO?
     } else {
         rc = handle_static_asset(&ta, server_root);
     }
