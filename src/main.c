@@ -23,7 +23,7 @@
  * instead; that is, it should treat the request as if it
  * had been for /index.html instead.
  */
-bool html5_fallback = false;
+bool html5_fallback = true;
 
 /** silent_mode. During benchmarking, this will be true */
 bool silent_mode = false;

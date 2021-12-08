@@ -19,7 +19,6 @@
 #include <time.h>
 #include <fcntl.h>
 #include <linux/limits.h>
-#include <dirent.h>  // for reading directory
 
 #include "http.h"
 #include "hexdump.h"
@@ -32,15 +31,6 @@
 #define CR "\r"
 #define STARTS_WITH(field_name, header) \
     (!strncasecmp(field_name, header, sizeof(header) - 1))
-
-
-
-// username and password -- bad to store in code but for now whatever
-static const char* MY_USERNAME = "user0";
-static const char* MY_PASSWORD = "thepassword";
-static const char* MY_JWT_CODE = "secret sauce";  // for encoding JWT
-
-
 
 /* Parse HTTP request line, setting req_method, req_path, and req_version. */
 static bool
@@ -117,8 +107,7 @@ http_process_headers(struct http_transaction *ta)
             field_value++;
 
         // you may print the header like so
-        printf("Header: %s: %s\n", field_name, field_value);
-
+        // printf("Header: %s: %s\n", field_name, field_value);
         if (!strcasecmp(field_name, "Content-Length")) {
             ta->req_content_len = atoi(field_value);
         }
@@ -126,23 +115,6 @@ http_process_headers(struct http_transaction *ta)
         /* Handle other headers here. Both field_value and field_name
          * are zero-terminated strings.
          */
-
-        // cookie header
-        if (!strcasecmp(field_name, "Cookie")) {
-            char* endptr2;
-            strtok_r(field_value, "=", &endptr2);
-            char* clientCookie = endptr2;
-            ta->req_cookie = clientCookie;
-        }
-
-        // range header
-        if (!strcasecmp(field_name, "Range")) {
-            char* endptr2;
-            strtok_r(field_value, "=", &endptr2);
-            char* range = endptr2;
-            // ta->req_cookie = clientCookie;
-            sscanf((const char*)range, "%ld-%ld", &ta->req_range_start, &ta->req_range_end);
-        }
     }
 }
 
@@ -178,11 +150,7 @@ add_content_length(buffer_t *res, size_t len)
 static void
 start_response(struct http_transaction * ta, buffer_t *res)
 {
-    // append the right http version
-    if (ta->req_version == HTTP_1_1)
-        buffer_appends(res, "HTTP/1.1 ");
-    else
-        buffer_appends(res, "HTTP/1.0 ");
+    buffer_appends(res, "HTTP/1.0 ");
 
     switch (ta->resp_status) {
     case HTTP_OK:
@@ -277,7 +245,7 @@ send_error(struct http_transaction * ta, enum http_response_status status, const
 static bool
 send_not_found(struct http_transaction *ta)
 {
-    return send_error(ta, HTTP_NOT_FOUND, "File %s not found.", 
+    return send_error(ta, HTTP_NOT_FOUND, "File %s not found", 
         bufio_offset2ptr(ta->client->bufio, ta->req_path));
 }
 
@@ -294,9 +262,6 @@ guess_mime_type(char *filename)
     if (!strcasecmp(suffix, ".html"))
         return "text/html";
 
-    if (!strcasecmp(suffix, ".css"))
-        return "text/css";
-
     if (!strcasecmp(suffix, ".gif"))
         return "image/gif";
 
@@ -308,9 +273,6 @@ guess_mime_type(char *filename)
 
     if (!strcasecmp(suffix, ".js"))
         return "text/javascript";
-
-    if (!strcasecmp(suffix, ".mp4"))
-        return "video/mp4";
 
     return "text/plain";
 }
@@ -325,31 +287,51 @@ guess_mime_type(char *filename)
 }*/
 
 
-/* Handle HTTP transaction for static AND video files. */
+
+static bool open_file(struct http_transaction *ta, const char* path)
+{
+    
+}
+/**
+ * Sends the fallback html in the event of failure.
+ * It is highly tailored to its current params, so if any changes are
+ * made to the html file itself, be sure to change the character counts accordingly.
+ */
+/*static bool
+send_fallback(struct http_transaction *ta, char* basedir)
+{
+    ta->resp_status = HTTP_OK;
+    int filefd = open(fname, O_RDONLY);
+    if (filefd == -1) {
+        return send_not_found(ta);
+    }
+
+    ta->resp_status = HTTP_OK;
+    http_add_header(&ta->resp_headers, "Content-Type", "%s", guess_mime_type(fname));
+    off_t from = 0, to = st.st_size - 1;
+
+    off_t content_length = to + 1 - from;
+    add_content_length(&ta->resp_headers, content_length);
+}*/
+
+/* Handle HTTP transaction for static files. */
 static bool
-handle_static_vid_asset(struct http_transaction *ta, char *basedir)
+handle_static_asset(struct http_transaction *ta, char *basedir)
 {
     char fname[PATH_MAX];
 
     char *req_path = bufio_offset2ptr(ta->client->bufio, ta->req_path);
     // The code below is vulnerable to an attack.  Can you see
     // which?  Fix it to avoid indirect object reference (IDOR) attacks.
+    snprintf(fname, sizeof fname, "%s%s", basedir, req_path);
 
-    // if the base directory is null, just use the request path.
-    if (basedir == NULL)
-    {
-        snprintf(fname, sizeof fname, "%s", req_path);
-    }
-    else
-    {
-        snprintf(fname, sizeof fname, "%s%s", basedir, req_path);
-    }
+    printf("fname: %s\n", fname);
+    printf("req: %s\n", req_path);
     // If a bad sequence was found
     if (strstr(req_path, ".."))
     {
-        // printf("ERROR: User attempted to use special path character sequences."); // Error reporting for server.
-        // return send_not_found(ta); // Send not found.
-        return send_error(ta, HTTP_PERMISSION_DENIED, "Permission denied -- attempting to access parent files.");
+        printf("ERROR: User attempted to use special path character sequences.\n"); // Error reporting for server.
+        return send_not_found(ta); // Send not found.
     }
 
     if (access(fname, R_OK)) {
@@ -367,7 +349,7 @@ handle_static_vid_asset(struct http_transaction *ta, char *basedir)
         return send_error(ta, HTTP_INTERNAL_ERROR, "Could not stat file.");
 
     
-    int filefd = open(fname, O_RDONLY); // File reading seems to be bugged here... why?
+    int filefd = open(fname, O_RDONLY);
     if (filefd == -1) {
         return send_not_found(ta);
     }
@@ -375,19 +357,6 @@ handle_static_vid_asset(struct http_transaction *ta, char *basedir)
     ta->resp_status = HTTP_OK;
     http_add_header(&ta->resp_headers, "Content-Type", "%s", guess_mime_type(fname));
     off_t from = 0, to = st.st_size - 1;
-
-    // handle .mp4's!
-    if (strstr(req_path, ".mp4")) {
-        http_add_header(&ta->resp_headers, "Accept-Ranges", "bytes");  // accept-ranges header
-        // by default, from and to will be the entire mp4 unless a range header was specified
-        if (ta->req_range_start != -1) {
-            ta->resp_status = HTTP_PARTIAL_CONTENT;  // change status
-            from = ta->req_range_start;
-            if (ta->req_range_end != -1)
-                to = ta->req_range_end;
-        }
-        http_add_header(&ta->resp_headers, "Content-Range", "bytes %ld-%ld/%ld", from, to, st.st_size);  // content-range header
-    }
 
     off_t content_length = to + 1 - from;
     add_content_length(&ta->resp_headers, content_length);
@@ -405,172 +374,10 @@ out:
     return success;
 }
 
-/* Handle calls to GET/POST /api/login. */
 static bool
-handle_api_login(struct http_transaction *ta)
+handle_api(struct http_transaction *ta)
 {
-    // case 1: POST request
-    if (ta->req_method == HTTP_POST) {
-        // check that body is not empty
-        if (ta->req_content_len == 0)
-            return send_error(ta, HTTP_BAD_REQUEST, "Invalid JSON object!");
-
-        // try to parse request body for json
-        char *body = bufio_offset2ptr(ta->client->bufio, ta->req_body);
-        json_t* userCredentials = json_loadb(body, ta->req_content_len, JSON_DECODE_ANY, NULL);
-        if (userCredentials == NULL)
-            return send_error(ta, HTTP_BAD_REQUEST, "Invalid JSON object!");
-
-        // get username and password
-        json_t* userJSON = json_object_get(userCredentials, "username");
-        json_t* passJSON = json_object_get(userCredentials, "password");
-        if (userJSON == NULL || passJSON == NULL)
-            return send_error(ta, HTTP_BAD_REQUEST, "Invalid JSON object!");
-
-        const char* userSTR = json_string_value(userJSON);
-        const char* passSTR = json_string_value(passJSON);
-        if (userSTR == NULL || passSTR == NULL)
-            return send_error(ta, HTTP_BAD_REQUEST, "Invalid JSON object!");
-
-        // if username or password doesn't match, 403 error
-        if (strcmp(userSTR, MY_USERNAME) || strcmp(passSTR, MY_PASSWORD))
-            return send_error(ta, HTTP_PERMISSION_DENIED, "Permission denied.");
-        
-        // correct! --> create a JWT for the user
-        jwt_t* myToken;
-        jwt_new(&myToken);
-        jwt_add_grant(myToken, "sub", "user0");
-        time_t now = time(NULL);
-        jwt_add_grant_int(myToken, "iat", now);
-        jwt_add_grant_int(myToken, "exp", now + 3600 * 24);
-        jwt_set_alg(myToken, JWT_ALG_HS256, (unsigned char*)MY_JWT_CODE, strlen(MY_JWT_CODE));
-        char* grants = jwt_get_grants_json(myToken, NULL);  // what to return to client in body
-        char* encoded = jwt_encode_str(myToken);  // cookies to give to client
-
-        // response header stuff
-        ta->resp_status = HTTP_OK;
-        http_add_header(&ta->resp_headers, "Set-Cookie", "auth_token=%s; Path=/", encoded);  // this is the cookie
-        http_add_header(&ta->resp_headers, "Content-Type", "application/json");
-
-        // add JWT to response body
-        buffer_appends(&ta->resp_body, grants);
-
-        // finally... send response! (headers + body)
-        bool success = send_response(ta);
-
-        free(grants);
-        free(encoded);
-        return success;
-    }
-
-    // case 2: GET request
-    else if (ta->req_method == HTTP_GET) {
-        // status + response header should always be same for this one
-        ta->resp_status = HTTP_OK;
-        http_add_header(&ta->resp_headers, "Content-Type", "application/json");
-
-        // check for existence of cookies
-        if (ta->req_cookie == NULL) {
-            buffer_appends(&ta->resp_body, "{}");
-            return send_response(ta);
-        }
-
-        // get client cookie and validate it
-        char* clientCookie = ta->req_cookie;
-        jwt_t* clientCookieDecoded;
-        if (jwt_decode(&clientCookieDecoded, clientCookie, (unsigned char*)MY_JWT_CODE, strlen(MY_JWT_CODE))) {
-            buffer_appends(&ta->resp_body, "{}");
-            return send_response(ta);
-        }
-
-        // valid cookie! --> return client claims
-        char* grants = jwt_get_grants_json(clientCookieDecoded, NULL);
-        buffer_appends(&ta->resp_body, grants);
-        bool success = send_response(ta);
-
-        free(grants);
-        return success;
-    }
-
-    // case 3: neither (invalid)
-    else {
-        return send_error(ta, HTTP_METHOD_NOT_ALLOWED, "Method not allowed.");
-    }
-}
-
-/* Handle calls to GET /api/video. */
-static bool
-handle_api_video(struct http_transaction *ta, char *basedir)
-{
-    // make sure it's a GET request
-    if (ta->req_method != HTTP_GET)
-        return send_error(ta, HTTP_METHOD_NOT_ALLOWED, "Method not allowed.");
-    
-    // status + response header should always be same for this one
-    ta->resp_status = HTTP_OK;
-    http_add_header(&ta->resp_headers, "Content-Type", "application/json");
-
-    // open current directory for reading
-    DIR* currDir = opendir(basedir);
-    struct dirent* dp;
-
-    // create new JSON array of vids
-    json_t* vidsArray = json_array();
-
-    // add all .mp4's in current directory to array
-    while ((dp = readdir (currDir)) != NULL) {
-        if (dp->d_type == DT_REG && strstr(dp->d_name, ".mp4")) {
-            json_t* newVid = json_object();
-            struct stat st;
-            stat(dp->d_name, &st);
-            json_object_set(newVid, "size", json_integer(st.st_size));  // set vid size
-            json_object_set(newVid, "name", json_string(dp->d_name));  // set vid name
-            json_array_append(vidsArray, newVid);  // add to array
-        }
-    }
-
-    // append array of vids to response body
-    char* vidsArrayString = json_dumps(vidsArray, JSON_INDENT(2));
-    buffer_appends(&ta->resp_body, vidsArrayString);
-
-    // finally... send response! (headers + body)
-    bool success = send_response(ta);
-
-    free (vidsArrayString);
-    return success;
-}
-
-/* Handle calls to /api. */
-static bool
-handle_api(struct http_transaction *ta, char *basedir)
-{
-    char *req_path = bufio_offset2ptr(ta->client->bufio, ta->req_path);
-    // /api/login
-    if (strstr(req_path, "/login"))
-        return handle_api_login(ta);
-    // /api/video
-    if (strstr(req_path, "/video"))
-        return handle_api_video(ta, basedir);
-    // unsupported
-    return send_error(ta, HTTP_NOT_IMPLEMENTED, "Not implemented.");
-}
-
-/* Handle calls to GET private/... */
-static bool
-handle_private(struct http_transaction *ta, char *basedir)
-{
-    // check for existence of cookies
-    if (ta->req_cookie == NULL)
-        return send_error(ta, HTTP_PERMISSION_DENIED, "Permission denied.");
-
-    // get client cookie and validate it
-    char* clientCookie = ta->req_cookie;
-    jwt_t* clientCookieDecoded;
-    if (jwt_decode(&clientCookieDecoded, clientCookie, (unsigned char*)MY_JWT_CODE, strlen(MY_JWT_CODE)))
-        return send_error(ta, HTTP_PERMISSION_DENIED, "Permission denied.");
-
-    // valid cookie! --> give client the static/video file
-    return handle_static_vid_asset(ta, basedir);
+    return send_error(ta, HTTP_NOT_FOUND, "API not implemented"); // TODO!!!
 }
 
 /* Set up an http client, associating it with a bufio buffer. */
@@ -587,10 +394,6 @@ http_handle_transaction(struct http_client *self)
     struct http_transaction ta;
     memset(&ta, 0, sizeof ta);
     ta.client = self;
-
-    ta.req_cookie = NULL;  // no cookies by default
-    ta.req_range_start = -1;  // no range by default
-    ta.req_range_end = -1;    // ^
 
     if (!http_parse_request(&ta))
         return false;
@@ -615,12 +418,12 @@ http_handle_transaction(struct http_client *self)
     bool rc = false;
     char *req_path = bufio_offset2ptr(ta.client->bufio, ta.req_path);
     if (STARTS_WITH(req_path, "/api")) {
-        rc = handle_api(&ta, server_root);
+        rc = handle_api(&ta);
     } else
     if (STARTS_WITH(req_path, "/private")) {
-        rc = handle_private(&ta, server_root);
+        /* not implemented */   // TODO?
     } else {
-        rc = handle_static_vid_asset(&ta, server_root);
+        rc = handle_static_asset(&ta, server_root);
     }
 
     buffer_delete(&ta.resp_headers);
