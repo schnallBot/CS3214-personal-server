@@ -308,13 +308,6 @@ guess_mime_type(char *filename)
     return "text/plain";
 }
 
-
-
-
-/*static bool open_file(struct http_transaction *ta, const char* path)
-{
-    
-}*/
 /**
  * Sends the fallback html in the event of failure.
  * It is highly tailored to its current params, so if any changes are
@@ -362,9 +355,9 @@ out:
     return success;
 }
 
-/* Handle HTTP transaction for static files. */
+/* Handle HTTP transaction for static AND video files. */
 static bool
-handle_static_asset(struct http_transaction *ta, char *basedir)
+handle_static_vid_asset(struct http_transaction *ta, char *basedir)
 {
     char fname[PATH_MAX];
 
@@ -372,14 +365,11 @@ handle_static_asset(struct http_transaction *ta, char *basedir)
     // The code below is vulnerable to an attack.  Can you see
     // which?  Fix it to avoid indirect object reference (IDOR) attacks.
     snprintf(fname, sizeof fname, "%s%s", basedir, req_path);
-
-    printf("fname: %s\n", fname);
-    printf("req: %s\n", req_path);
     // If a bad sequence was found
     if (strstr(req_path, ".."))
     {
-        printf("ERROR: User attempted to use special path character sequences.\n"); // Error reporting for server.
-        //return send_not_found(ta); // Send not found.
+        // printf("ERROR: User attempted to use special path character sequences."); // Error reporting for server.
+        // return send_not_found(ta); // Send not found.
         return send_fallback(ta, basedir);
     }
 
@@ -399,15 +389,28 @@ handle_static_asset(struct http_transaction *ta, char *basedir)
         return send_error(ta, HTTP_INTERNAL_ERROR, "Could not stat file.");
 
     
-    int filefd = open(fname, O_RDONLY);
+    int filefd = open(fname, O_RDONLY); // File reading seems to be bugged here... why?
     if (filefd == -1) {
-        return send_fallback(ta, basedir);
         //return send_not_found(ta);
+        return send_fallback(ta, basedir);
     }
 
     ta->resp_status = HTTP_OK;
     http_add_header(&ta->resp_headers, "Content-Type", "%s", guess_mime_type(fname));
     off_t from = 0, to = st.st_size - 1;
+
+    // handle .mp4's!
+    if (strstr(req_path, ".mp4")) {
+        http_add_header(&ta->resp_headers, "Accept-Ranges", "bytes");  // accept-ranges header
+        // by default, from and to will be the entire mp4 unless a range header was specified
+        if (ta->req_range_start != -1) {
+            ta->resp_status = HTTP_PARTIAL_CONTENT;  // change status
+            from = ta->req_range_start;
+            if (ta->req_range_end != -1)
+                to = ta->req_range_end;
+        }
+        http_add_header(&ta->resp_headers, "Content-Range", "bytes %ld-%ld/%ld", from, to, st.st_size);  // content-range header
+    }
 
     off_t content_length = to + 1 - from;
     add_content_length(&ta->resp_headers, content_length);
@@ -424,6 +427,7 @@ out:
     close(filefd);
     return success;
 }
+
 
 /* Handle calls to GET/POST /api/login. */
 static bool
