@@ -277,31 +277,35 @@ guess_mime_type(char *filename)
     return "text/plain";
 }
 
-/** Helper that both parses and checks the string for invalid mutations. */
-/*static int path_parse(char* string, size_t size, const char* source1, const char)
-{
-    for (int i = 0; i < size)
-    {
-
-    }
-}*/
 
 
 
-static bool open_file(struct http_transaction *ta, const char* path)
+/*static bool open_file(struct http_transaction *ta, const char* path)
 {
     
-}
+}*/
 /**
  * Sends the fallback html in the event of failure.
  * It is highly tailored to its current params, so if any changes are
  * made to the html file itself, be sure to change the character counts accordingly.
  */
-/*static bool
+static bool
 send_fallback(struct http_transaction *ta, char* basedir)
 {
+    // Determine file size
+    char fname[PATH_MAX];
+
+    snprintf(fname, sizeof fname, "%s%s", basedir, "/index.html");
+
+    printf("fallback path: %s\n", fname);
+    struct stat st;
+    int rc = stat(fname, &st);
+    if (rc == -1)
+        return send_error(ta, HTTP_INTERNAL_ERROR, "Could not stat file.");
+
     ta->resp_status = HTTP_OK;
     int filefd = open(fname, O_RDONLY);
+
     if (filefd == -1) {
         return send_not_found(ta);
     }
@@ -312,7 +316,20 @@ send_fallback(struct http_transaction *ta, char* basedir)
 
     off_t content_length = to + 1 - from;
     add_content_length(&ta->resp_headers, content_length);
-}*/
+
+    // Extracted from the static file code
+    bool success = send_response_header(ta);
+    if (!success)
+        goto out;
+
+    // sendfile may send fewer bytes than requested, hence the loop
+    while (success && from <= to)
+        success = bufio_sendfile(ta->client->bufio, filefd, &from, to + 1 - from) > 0;
+
+out:
+    close(filefd);
+    return success;
+}
 
 /* Handle HTTP transaction for static files. */
 static bool
@@ -331,14 +348,16 @@ handle_static_asset(struct http_transaction *ta, char *basedir)
     if (strstr(req_path, ".."))
     {
         printf("ERROR: User attempted to use special path character sequences.\n"); // Error reporting for server.
-        return send_not_found(ta); // Send not found.
+        //return send_not_found(ta); // Send not found.
+        return send_fallback(ta, basedir);
     }
 
     if (access(fname, R_OK)) {
         if (errno == EACCES)
             return send_error(ta, HTTP_PERMISSION_DENIED, "Permission denied.");
         else
-            return send_not_found(ta);
+            //return send_not_found(ta);
+            return send_fallback(ta, basedir);
     }
 
     // Determine file size
@@ -351,7 +370,8 @@ handle_static_asset(struct http_transaction *ta, char *basedir)
     
     int filefd = open(fname, O_RDONLY);
     if (filefd == -1) {
-        return send_not_found(ta);
+        return send_fallback(ta, basedir);
+        //return send_not_found(ta);
     }
 
     ta->resp_status = HTTP_OK;
