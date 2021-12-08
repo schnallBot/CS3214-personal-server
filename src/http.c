@@ -15,7 +15,7 @@
 #include <time.h>
 #include <fcntl.h>
 #include <linux/limits.h>
-#include <dirent.h>
+#include <dirent.h>  // for reading directory
 
 #include "http.h"
 #include "hexdump.h"
@@ -113,7 +113,8 @@ http_process_headers(struct http_transaction *ta)
             field_value++;
 
         // you may print the header like so
-        // printf("Header: %s: %s\n", field_name, field_value);
+        printf("Header: %s: %s\n", field_name, field_value);
+
         if (!strcasecmp(field_name, "Content-Length")) {
             ta->req_content_len = atoi(field_value);
         }
@@ -135,7 +136,6 @@ http_process_headers(struct http_transaction *ta)
             char* endptr2;
             strtok_r(field_value, "=", &endptr2);
             char* range = endptr2;
-            // ta->req_cookie = clientCookie;
             sscanf((const char*)range, "%ld-%ld", &ta->req_range_start, &ta->req_range_end);
         }
 
@@ -181,7 +181,12 @@ add_content_length(buffer_t *res, size_t len)
 static void
 start_response(struct http_transaction * ta, buffer_t *res)
 {
-    buffer_appends(res, "HTTP/1.0 ");
+
+    // append the right http version
+    if (ta->req_version == HTTP_1_1)
+        buffer_appends(res, "HTTP/1.1 ");
+    else
+        buffer_appends(res, "HTTP/1.0 ");
 
     switch (ta->resp_status) {
     case HTTP_OK:
@@ -304,6 +309,9 @@ guess_mime_type(char *filename)
 
     if (!strcasecmp(suffix, ".js"))
         return "text/javascript";
+
+    if (!strcasecmp(suffix, ".mp4"))
+        return "video/mp4";
 
     return "text/plain";
 }
