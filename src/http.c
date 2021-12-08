@@ -1,12 +1,8 @@
-/*
- * A partial implementation of HTTP/1.0
- *
- * This code is mainly intended as a replacement for the book's 'tiny.c' server
- * It provides a *partial* implementation of HTTP/1.0 which can form a basis for
- * the assignment.
- *
- * @author G. Back for CS 3214 Spring 2018
+/**
+ * Josh Ho (hojosh2000), Zachary Zawitoski (zachzaw); CS3214
+ * p4 -- personal server
  */
+
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -35,7 +31,7 @@
 
 
 
-// username and password -- bad to store in code but for now whatever
+// bad to store in code but for now whatever
 static const char* MY_USERNAME = "user0";
 static const char* MY_PASSWORD = "thepassword";
 static const char* MY_JWT_CODE = "secret sauce";  // for encoding JWT
@@ -142,6 +138,14 @@ http_process_headers(struct http_transaction *ta)
             char* range = endptr2;
             // ta->req_cookie = clientCookie;
             sscanf((const char*)range, "%ld-%ld", &ta->req_range_start, &ta->req_range_end);
+        }
+
+        // connection header
+        if (!strcasecmp(field_name, "Connection")) {
+            if (!strcasecmp(field_value, "keep-alive"))
+                ta->req_keep_alive = true;
+            else
+                ta->req_keep_alive = false;
         }
     }
 }
@@ -349,7 +353,7 @@ handle_static_vid_asset(struct http_transaction *ta, char *basedir)
     {
         // printf("ERROR: User attempted to use special path character sequences."); // Error reporting for server.
         // return send_not_found(ta); // Send not found.
-        return send_error(ta, HTTP_PERMISSION_DENIED, "Permission denied -- attempting to access parent files.");
+        return send_not_found(ta);
     }
 
     if (access(fname, R_OK)) {
@@ -442,7 +446,7 @@ handle_api_login(struct http_transaction *ta)
         jwt_add_grant(myToken, "sub", "user0");
         time_t now = time(NULL);
         jwt_add_grant_int(myToken, "iat", now);
-        jwt_add_grant_int(myToken, "exp", now + 3600 * 24);
+        jwt_add_grant_int(myToken, "exp", now + token_expiration_time);
         jwt_set_alg(myToken, JWT_ALG_HS256, (unsigned char*)MY_JWT_CODE, strlen(MY_JWT_CODE));
         char* grants = jwt_get_grants_json(myToken, NULL);  // what to return to client in body
         char* encoded = jwt_encode_str(myToken);  // cookies to give to client
@@ -479,6 +483,13 @@ handle_api_login(struct http_transaction *ta)
         char* clientCookie = ta->req_cookie;
         jwt_t* clientCookieDecoded;
         if (jwt_decode(&clientCookieDecoded, clientCookie, (unsigned char*)MY_JWT_CODE, strlen(MY_JWT_CODE))) {
+            buffer_appends(&ta->resp_body, "{}");
+            return send_response(ta);
+        }
+        // check for expired token
+        time_t now = time(NULL);
+        time_t exp = jwt_get_grant_int(clientCookieDecoded, "exp");
+        if (now > exp) {
             buffer_appends(&ta->resp_body, "{}");
             return send_response(ta);
         }
@@ -568,6 +579,11 @@ handle_private(struct http_transaction *ta, char *basedir)
     jwt_t* clientCookieDecoded;
     if (jwt_decode(&clientCookieDecoded, clientCookie, (unsigned char*)MY_JWT_CODE, strlen(MY_JWT_CODE)))
         return send_error(ta, HTTP_PERMISSION_DENIED, "Permission denied.");
+    // check for expired token
+    time_t now = time(NULL);
+    time_t exp = jwt_get_grant_int(clientCookieDecoded, "exp");
+    if (now > exp)
+        return send_error(ta, HTTP_PERMISSION_DENIED, "Permission denied.");
 
     // valid cookie! --> give client the static/video file
     return handle_static_vid_asset(ta, basedir);
@@ -585,46 +601,58 @@ bool
 http_handle_transaction(struct http_client *self)
 {
     struct http_transaction ta;
-    memset(&ta, 0, sizeof ta);
-    ta.client = self;
+    bool rc;
 
-    ta.req_cookie = NULL;  // no cookies by default
-    ta.req_range_start = -1;  // no range by default
-    ta.req_range_end = -1;    // ^
+    do {
+        // struct http_transaction ta;
+        memset(&ta, 0, sizeof ta);
+        ta.client = self;
 
-    if (!http_parse_request(&ta))
-        return false;
+        ta.req_cookie = NULL;  // no cookies by default
+        ta.req_range_start = -1;  // no range by default
+        ta.req_range_end = -1;    // ^
 
-    if (!http_process_headers(&ta))
-        return false;
-
-    if (ta.req_content_len > 0) {
-        int rc = bufio_read(self->bufio, ta.req_content_len, &ta.req_body);
-        if (rc != ta.req_content_len)
+        if (!http_parse_request(&ta))
             return false;
 
-        // To see the body, use this:
-        char *body = bufio_offset2ptr(ta.client->bufio, ta.req_body);
-        hexdump(body, ta.req_content_len);
-    }
+        // default persistence depending on HTTP ver.
+        if (ta.req_version == HTTP_1_0)
+            ta.req_keep_alive = false;
+        else
+            ta.req_keep_alive = true;
 
-    buffer_init(&ta.resp_headers, 1024);
-    http_add_header(&ta.resp_headers, "Server", "CS3214-Personal-Server"); // Custom server name
-    buffer_init(&ta.resp_body, 0);
+        if (!http_process_headers(&ta))
+            return false;
 
-    bool rc = false;
-    char *req_path = bufio_offset2ptr(ta.client->bufio, ta.req_path);
-    if (STARTS_WITH(req_path, "/api")) {
-        rc = handle_api(&ta, server_root);
-    } else
-    if (STARTS_WITH(req_path, "/private")) {
-        rc = handle_private(&ta, server_root);
-    } else {
-        rc = handle_static_vid_asset(&ta, server_root);
-    }
+        if (ta.req_content_len > 0) {
+            int rc = bufio_read(self->bufio, ta.req_content_len, &ta.req_body);
+            if (rc != ta.req_content_len)
+                return false;
 
-    buffer_delete(&ta.resp_headers);
-    buffer_delete(&ta.resp_body);
+            // To see the body, use this:
+            char *body = bufio_offset2ptr(ta.client->bufio, ta.req_body);
+            hexdump(body, ta.req_content_len);
+        }
+
+        buffer_init(&ta.resp_headers, 1024);
+        http_add_header(&ta.resp_headers, "Server", "CS3214-Personal-Server"); // Custom server name
+        buffer_init(&ta.resp_body, 0);
+
+        rc = false;
+        char *req_path = bufio_offset2ptr(ta.client->bufio, ta.req_path);
+        if (STARTS_WITH(req_path, "/api")) {
+            rc = handle_api(&ta, server_root);
+        } else
+        if (STARTS_WITH(req_path, "/private")) {
+            rc = handle_private(&ta, server_root);
+        } else {
+            rc = handle_static_vid_asset(&ta, server_root);
+        }
+
+        buffer_delete(&ta.resp_headers);
+        buffer_delete(&ta.resp_body);
+
+    } while (ta.req_keep_alive && rc);
 
     return rc;
 }
