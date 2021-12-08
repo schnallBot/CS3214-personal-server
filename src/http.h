@@ -41,6 +41,8 @@ struct http_transaction {
     size_t req_body;        // ditto
     int req_content_len;    // content length of request body
     char* req_cookie;  // NEW!!!
+    off_t req_range_start;  // NEW!!
+    off_t req_range_end;  // NEW!!
 
 
     /* response related fields */
