@@ -1,10 +1,11 @@
 
 # change this number as per instruction to avoid conflicts.
-PORT=10000
+PORT=13945
 
 # to test against a working implementation (and see the intended responses)
 # change this variable, e.g.
 # use URL=http://theta.cs.vt.edu:3000/
+# URL=http://dogwood.rlogin:12345
 URL=http://localhost:${PORT}
 
 # the file in which curl stores cookies across runs

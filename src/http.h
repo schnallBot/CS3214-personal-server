@@ -2,6 +2,7 @@
 #define _HTTP_H
 
 #include <jwt.h>
+#include <jansson.h>
 #include <stdbool.h>
 
 #include "buffer.h"
@@ -39,6 +40,7 @@ struct http_transaction {
     size_t req_path;        // expressed as offset into the client's bufio.
     size_t req_body;        // ditto
     int req_content_len;    // content length of request body
+    char* req_cookie;  // NEW!!!
 
 
     /* response related fields */
