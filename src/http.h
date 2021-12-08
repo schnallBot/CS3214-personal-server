@@ -43,6 +43,7 @@ struct http_transaction {
     char* req_cookie;  // NEW!!!
     off_t req_range_start;  // NEW!!
     off_t req_range_end;  // NEW!!
+    bool req_keep_alive;  // NEW!!!
 
 
     /* response related fields */

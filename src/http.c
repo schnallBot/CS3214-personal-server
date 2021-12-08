@@ -1,12 +1,8 @@
-/*
- * A partial implementation of HTTP/1.0
- *
- * This code is mainly intended as a replacement for the book's 'tiny.c' server
- * It provides a *partial* implementation of HTTP/1.0 which can form a basis for
- * the assignment.
- *
- * @author G. Back for CS 3214 Spring 2018
+/**
+ * Josh Ho (hojosh2000), Zachary Zawitoski (zachzaw); CS3214
+ * p4 -- personal server
  */
+
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -19,6 +15,7 @@
 #include <time.h>
 #include <fcntl.h>
 #include <linux/limits.h>
+#include <dirent.h>
 
 #include "http.h"
 #include "hexdump.h"
@@ -31,6 +28,15 @@
 #define CR "\r"
 #define STARTS_WITH(field_name, header) \
     (!strncasecmp(field_name, header, sizeof(header) - 1))
+
+
+
+// bad to store in code but for now whatever
+static const char* MY_USERNAME = "user0";
+static const char* MY_PASSWORD = "thepassword";
+static const char* MY_JWT_CODE = "secret sauce";  // for encoding JWT
+
+
 
 /* Parse HTTP request line, setting req_method, req_path, and req_version. */
 static bool
@@ -115,6 +121,31 @@ http_process_headers(struct http_transaction *ta)
         /* Handle other headers here. Both field_value and field_name
          * are zero-terminated strings.
          */
+
+        // cookie header
+        if (!strcasecmp(field_name, "Cookie")) {
+            char* endptr2;
+            strtok_r(field_value, "=", &endptr2);
+            char* clientCookie = endptr2;
+            ta->req_cookie = clientCookie;
+        }
+
+        // range header
+        if (!strcasecmp(field_name, "Range")) {
+            char* endptr2;
+            strtok_r(field_value, "=", &endptr2);
+            char* range = endptr2;
+            // ta->req_cookie = clientCookie;
+            sscanf((const char*)range, "%ld-%ld", &ta->req_range_start, &ta->req_range_end);
+        }
+
+        // connection header
+        if (!strcasecmp(field_name, "Connection")) {
+            if (!strcasecmp(field_value, "keep-alive"))
+                ta->req_keep_alive = true;
+            else
+                ta->req_keep_alive = false;
+        }
     }
 }
 
@@ -394,10 +425,184 @@ out:
     return success;
 }
 
+/* Handle calls to GET/POST /api/login. */
 static bool
-handle_api(struct http_transaction *ta)
+handle_api_login(struct http_transaction *ta)
 {
-    return send_error(ta, HTTP_NOT_FOUND, "API not implemented"); // TODO!!!
+    // case 1: POST request
+    if (ta->req_method == HTTP_POST) {
+        // check that body is not empty
+        if (ta->req_content_len == 0)
+            return send_error(ta, HTTP_BAD_REQUEST, "Invalid JSON object!");
+
+        // try to parse request body for json
+        char *body = bufio_offset2ptr(ta->client->bufio, ta->req_body);
+        json_t* userCredentials = json_loadb(body, ta->req_content_len, JSON_DECODE_ANY, NULL);
+        if (userCredentials == NULL)
+            return send_error(ta, HTTP_BAD_REQUEST, "Invalid JSON object!");
+
+        // get username and password
+        json_t* userJSON = json_object_get(userCredentials, "username");
+        json_t* passJSON = json_object_get(userCredentials, "password");
+        if (userJSON == NULL || passJSON == NULL)
+            return send_error(ta, HTTP_BAD_REQUEST, "Invalid JSON object!");
+
+        const char* userSTR = json_string_value(userJSON);
+        const char* passSTR = json_string_value(passJSON);
+        if (userSTR == NULL || passSTR == NULL)
+            return send_error(ta, HTTP_BAD_REQUEST, "Invalid JSON object!");
+
+        // if username or password doesn't match, 403 error
+        if (strcmp(userSTR, MY_USERNAME) || strcmp(passSTR, MY_PASSWORD))
+            return send_error(ta, HTTP_PERMISSION_DENIED, "Permission denied.");
+        
+        // correct! --> create a JWT for the user
+        jwt_t* myToken;
+        jwt_new(&myToken);
+        jwt_add_grant(myToken, "sub", "user0");
+        time_t now = time(NULL);
+        jwt_add_grant_int(myToken, "iat", now);
+        jwt_add_grant_int(myToken, "exp", now + token_expiration_time);
+        jwt_set_alg(myToken, JWT_ALG_HS256, (unsigned char*)MY_JWT_CODE, strlen(MY_JWT_CODE));
+        char* grants = jwt_get_grants_json(myToken, NULL);  // what to return to client in body
+        char* encoded = jwt_encode_str(myToken);  // cookies to give to client
+
+        // response header stuff
+        ta->resp_status = HTTP_OK;
+        http_add_header(&ta->resp_headers, "Set-Cookie", "auth_token=%s; Path=/", encoded);  // this is the cookie
+        http_add_header(&ta->resp_headers, "Content-Type", "application/json");
+
+        // add JWT to response body
+        buffer_appends(&ta->resp_body, grants);
+
+        // finally... send response! (headers + body)
+        bool success = send_response(ta);
+
+        free(grants);
+        free(encoded);
+        return success;
+    }
+
+    // case 2: GET request
+    else if (ta->req_method == HTTP_GET) {
+        // status + response header should always be same for this one
+        ta->resp_status = HTTP_OK;
+        http_add_header(&ta->resp_headers, "Content-Type", "application/json");
+
+        // check for existence of cookies
+        if (ta->req_cookie == NULL) {
+            buffer_appends(&ta->resp_body, "{}");
+            return send_response(ta);
+        }
+
+        // get client cookie and validate it
+        char* clientCookie = ta->req_cookie;
+        jwt_t* clientCookieDecoded;
+        if (jwt_decode(&clientCookieDecoded, clientCookie, (unsigned char*)MY_JWT_CODE, strlen(MY_JWT_CODE))) {
+            buffer_appends(&ta->resp_body, "{}");
+            return send_response(ta);
+        }
+        // check for expired token
+        time_t now = time(NULL);
+        time_t exp = jwt_get_grant_int(clientCookieDecoded, "exp");
+        if (now > exp) {
+            buffer_appends(&ta->resp_body, "{}");
+            return send_response(ta);
+        }
+
+        // valid cookie! --> return client claims
+        char* grants = jwt_get_grants_json(clientCookieDecoded, NULL);
+        buffer_appends(&ta->resp_body, grants);
+        bool success = send_response(ta);
+
+        free(grants);
+        return success;
+    }
+
+    // case 3: neither (invalid)
+    else {
+        return send_error(ta, HTTP_METHOD_NOT_ALLOWED, "Method not allowed.");
+    }
+}
+
+/* Handle calls to GET /api/video. */
+static bool
+handle_api_video(struct http_transaction *ta, char *basedir)
+{
+    // make sure it's a GET request
+    if (ta->req_method != HTTP_GET)
+        return send_error(ta, HTTP_METHOD_NOT_ALLOWED, "Method not allowed.");
+    
+    // status + response header should always be same for this one
+    ta->resp_status = HTTP_OK;
+    http_add_header(&ta->resp_headers, "Content-Type", "application/json");
+
+    // open current directory for reading
+    DIR* currDir = opendir(basedir);
+    struct dirent* dp;
+
+    // create new JSON array of vids
+    json_t* vidsArray = json_array();
+
+    // add all .mp4's in current directory to array
+    while ((dp = readdir (currDir)) != NULL) {
+        if (dp->d_type == DT_REG && strstr(dp->d_name, ".mp4")) {
+            json_t* newVid = json_object();
+            struct stat st;
+            stat(dp->d_name, &st);
+            json_object_set(newVid, "size", json_integer(st.st_size));  // set vid size
+            json_object_set(newVid, "name", json_string(dp->d_name));  // set vid name
+            json_array_append(vidsArray, newVid);  // add to array
+        }
+    }
+
+    // append array of vids to response body
+    char* vidsArrayString = json_dumps(vidsArray, JSON_INDENT(2));
+    buffer_appends(&ta->resp_body, vidsArrayString);
+
+    // finally... send response! (headers + body)
+    bool success = send_response(ta);
+
+    free (vidsArrayString);
+    return success;
+}
+
+/* Handle calls to /api. */
+static bool
+handle_api(struct http_transaction *ta, char* basedir)
+{
+    char *req_path = bufio_offset2ptr(ta->client->bufio, ta->req_path);
+    // /api/login
+    if (strstr(req_path, "/login"))
+        return handle_api_login(ta);
+    // /api/video
+    if (strstr(req_path, "/video"))
+        return handle_api_video(ta, basedir);
+    // unsupported
+    return send_error(ta, HTTP_NOT_IMPLEMENTED, "Not implemented.");
+}
+
+/* Handle calls to GET private/... */
+static bool
+handle_private(struct http_transaction *ta, char *basedir)
+{
+    // check for existence of cookies
+    if (ta->req_cookie == NULL)
+        return send_error(ta, HTTP_PERMISSION_DENIED, "Permission denied.");
+
+    // get client cookie and validate it
+    char* clientCookie = ta->req_cookie;
+    jwt_t* clientCookieDecoded;
+    if (jwt_decode(&clientCookieDecoded, clientCookie, (unsigned char*)MY_JWT_CODE, strlen(MY_JWT_CODE)))
+        return send_error(ta, HTTP_PERMISSION_DENIED, "Permission denied.");
+    // check for expired token
+    time_t now = time(NULL);
+    time_t exp = jwt_get_grant_int(clientCookieDecoded, "exp");
+    if (now > exp)
+        return send_error(ta, HTTP_PERMISSION_DENIED, "Permission denied.");
+
+    // valid cookie! --> give client the static/video file
+    return handle_static_vid_asset(ta, basedir);
 }
 
 /* Set up an http client, associating it with a bufio buffer. */
@@ -412,42 +617,58 @@ bool
 http_handle_transaction(struct http_client *self)
 {
     struct http_transaction ta;
-    memset(&ta, 0, sizeof ta);
-    ta.client = self;
+    bool rc;
 
-    if (!http_parse_request(&ta))
-        return false;
+    do {
+        // struct http_transaction ta;
+        memset(&ta, 0, sizeof ta);
+        ta.client = self;
 
-    if (!http_process_headers(&ta))
-        return false;
+        ta.req_cookie = NULL;  // no cookies by default
+        ta.req_range_start = -1;  // no range by default
+        ta.req_range_end = -1;    // ^
 
-    if (ta.req_content_len > 0) {
-        int rc = bufio_read(self->bufio, ta.req_content_len, &ta.req_body);
-        if (rc != ta.req_content_len)
+        if (!http_parse_request(&ta))
             return false;
 
-        // To see the body, use this:
-        char *body = bufio_offset2ptr(ta.client->bufio, ta.req_body);
-        hexdump(body, ta.req_content_len);
-    }
+        // default persistence depending on HTTP ver.
+        if (ta.req_version == HTTP_1_0)
+            ta.req_keep_alive = false;
+        else
+            ta.req_keep_alive = true;
 
-    buffer_init(&ta.resp_headers, 1024);
-    http_add_header(&ta.resp_headers, "Server", "CS3214-Personal-Server"); // Custom server name
-    buffer_init(&ta.resp_body, 0);
+        if (!http_process_headers(&ta))
+            return false;
 
-    bool rc = false;
-    char *req_path = bufio_offset2ptr(ta.client->bufio, ta.req_path);
-    if (STARTS_WITH(req_path, "/api")) {
-        rc = handle_api(&ta);
-    } else
-    if (STARTS_WITH(req_path, "/private")) {
-        /* not implemented */   // TODO?
-    } else {
-        rc = handle_static_asset(&ta, server_root);
-    }
+        if (ta.req_content_len > 0) {
+            int rc = bufio_read(self->bufio, ta.req_content_len, &ta.req_body);
+            if (rc != ta.req_content_len)
+                return false;
 
-    buffer_delete(&ta.resp_headers);
-    buffer_delete(&ta.resp_body);
+            // To see the body, use this:
+            char *body = bufio_offset2ptr(ta.client->bufio, ta.req_body);
+            hexdump(body, ta.req_content_len);
+        }
+
+        buffer_init(&ta.resp_headers, 1024);
+        http_add_header(&ta.resp_headers, "Server", "CS3214-Personal-Server"); // Custom server name
+        buffer_init(&ta.resp_body, 0);
+
+        rc = false;
+        char *req_path = bufio_offset2ptr(ta.client->bufio, ta.req_path);
+        if (STARTS_WITH(req_path, "/api")) {
+            rc = handle_api(&ta, server_root);
+        } else
+        if (STARTS_WITH(req_path, "/private")) {
+            rc = handle_private(&ta, server_root);
+        } else {
+            rc = handle_static_vid_asset(&ta, server_root);
+        }
+
+        buffer_delete(&ta.resp_headers);
+        buffer_delete(&ta.resp_body);
+
+    } while (ta.req_keep_alive && rc);
 
     return rc;
 }
