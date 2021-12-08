@@ -378,15 +378,21 @@ handle_static_vid_asset(struct http_transaction *ta, char *basedir)
     {
         // printf("ERROR: User attempted to use special path character sequences."); // Error reporting for server.
         // return send_not_found(ta); // Send not found.
-        return send_fallback(ta, basedir);
+        if (html5_fallback)
+            return send_fallback(ta, basedir);
+        else
+            return send_not_found(ta);
     }
 
     if (access(fname, R_OK)) {
         if (errno == EACCES)
             return send_error(ta, HTTP_PERMISSION_DENIED, "Permission denied.");
-        else
-            //return send_not_found(ta);
-            return send_fallback(ta, basedir);
+        else {
+            if (html5_fallback)
+                return send_fallback(ta, basedir);
+            else
+                return send_not_found(ta);
+        }
     }
 
     // Determine file size
@@ -399,8 +405,10 @@ handle_static_vid_asset(struct http_transaction *ta, char *basedir)
     
     int filefd = open(fname, O_RDONLY); // File reading seems to be bugged here... why?
     if (filefd == -1) {
-        //return send_not_found(ta);
-        return send_fallback(ta, basedir);
+        if (html5_fallback)
+            return send_fallback(ta, basedir);
+        else
+            return send_not_found(ta);
     }
 
     ta->resp_status = HTTP_OK;
