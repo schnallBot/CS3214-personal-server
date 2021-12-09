@@ -6,6 +6,7 @@
 #include <stdbool.h>
 
 #include "buffer.h"
+#include "threadpool.h"
 struct bufio;
 
 enum http_method {
@@ -59,7 +60,7 @@ struct http_client {
 };
 
 void http_setup_client(struct http_client *, struct bufio *bufio);
-bool http_handle_transaction(struct http_client *);
+void* http_handle_transaction(struct thread_pool* pool, void* data);
 void http_add_header(buffer_t * resp, char* key, char* fmt, ...);
 
 #endif /* _HTTP_H */

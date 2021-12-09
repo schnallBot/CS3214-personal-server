@@ -633,8 +633,8 @@ http_setup_client(struct http_client *self, struct bufio *bufio)
 }
 
 /* Handle a single HTTP transaction.  Returns true on success. */
-bool
-http_handle_transaction(struct http_client *self)
+void*
+http_handle_transaction(struct thread_pool* pool, void* data)
 {
     struct http_transaction ta;
     bool rc;
@@ -642,14 +642,14 @@ http_handle_transaction(struct http_client *self)
     do {
         // struct http_transaction ta;
         memset(&ta, 0, sizeof ta);
-        ta.client = self;
+        ta.client = (struct http_client*)data;
 
         ta.req_cookie = NULL;  // no cookies by default
         ta.req_range_start = -1;  // no range by default
         ta.req_range_end = -1;    // ^
 
         if (!http_parse_request(&ta))
-            return false;
+            return (void*)false;
 
         // default persistence depending on HTTP ver.
         if (ta.req_version == HTTP_1_0)
@@ -658,12 +658,12 @@ http_handle_transaction(struct http_client *self)
             ta.req_keep_alive = true;
 
         if (!http_process_headers(&ta))
-            return false;
+            return (void*)false;
 
         if (ta.req_content_len > 0) {
-            int rc = bufio_read(self->bufio, ta.req_content_len, &ta.req_body);
+            int rc = bufio_read(ta.client->bufio, ta.req_content_len, &ta.req_body);
             if (rc != ta.req_content_len)
-                return false;
+                return (void*)false;
 
             // To see the body, use this:
             char *body = bufio_offset2ptr(ta.client->bufio, ta.req_body);
@@ -690,5 +690,5 @@ http_handle_transaction(struct http_client *self)
 
     } while (ta.req_keep_alive && rc);
 
-    return rc;
+    return (void*)rc;
 }

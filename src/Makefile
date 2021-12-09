@@ -8,8 +8,9 @@ CFLAGS=-g -O2 -pthread -Wall -Werror -Wmissing-prototypes -I$(DEP_INCLUDE_DIR)
 LDFLAGS=-pthread -Wl,-rpath -Wl,$(DEP_LIB_DIR)
 LDLIBS=-L$(DEP_LIB_DIR) -ljwt -ljansson -lcrypto -ldl
 
-HEADERS=socket.h http.h hexdump.h buffer.h bufio.h
-OBJ=main.o socket.o hexdump.o http.o bufio.o
+# added list and threadpool
+HEADERS=socket.h http.h hexdump.h buffer.h bufio.h list.h threadpool.h
+OBJ=main.o socket.o hexdump.o http.o bufio.o list.o threadpool.o
 
 
 OTHERS=jwt_demo_rs256 jwt_demo_hs256

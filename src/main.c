@@ -15,6 +15,9 @@
 #include "socket.h"
 #include "bufio.h"
 #include "main.h"
+#include "threadpool.h"
+
+#define N_THREADS 8  // for threadpool
 
 /* Implement HTML5 fallback.
  * If HTML5 fallback is implemented and activated, the server should
@@ -39,7 +42,7 @@ char * server_root;
  * For each client, it handles exactly 1 HTTP transaction.
  */
 static void
-server_loop(char *port_string)
+server_loop(char *port_string, struct thread_pool* pool)
 {
     int accepting_socket = socket_open_bind_listen(port_string, 10000);
     while (accepting_socket != -1) {
@@ -48,9 +51,15 @@ server_loop(char *port_string)
         if (client_socket == -1)
             return;
 
+        // set up new client
         struct http_client client;
         http_setup_client(&client, bufio_create(client_socket));
-        http_handle_transaction(&client);
+
+        // submit http transaction to threadpool
+        struct future* f = thread_pool_submit(pool, http_handle_transaction, &client);
+        future_get(f);
+        future_free(f);
+
         bufio_close(client.bufio);
     }
 }
@@ -111,7 +120,15 @@ main(int ac, char *av[])
     signal(SIGPIPE, SIG_IGN);
 
     fprintf(stderr, "Using port %s\n", port_string);
-    server_loop(port_string);
+
+    // create new threadpool for handling http transactions
+    struct thread_pool* pool = thread_pool_new(N_THREADS);
+
+    // server loop
+    server_loop(port_string, pool);
+
+    // shutdown threadpool and exit
+    thread_pool_shutdown_and_destroy(pool);
     exit(EXIT_SUCCESS);
 }
 
