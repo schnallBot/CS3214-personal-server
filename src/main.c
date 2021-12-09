@@ -1,8 +1,8 @@
-/*
- * Skeleton files for personal server assignment.
- *
- * @author Godmar Back
- * written for CS3214, Spring 2018.
+/**
+ * Josh Ho (hojosh2000), Zachary Zawitoski (zachzaw); CS3214
+ * p4 -- personal server
+ * 
+ * This file contains the main method to run the server.
  */
 
 #include <getopt.h>
@@ -10,12 +10,14 @@
 #include <stdlib.h>
 #include <signal.h>
 #include <pthread.h>
+
 #include "buffer.h"
 #include "hexdump.h"
 #include "http.h"
 #include "socket.h"
 #include "bufio.h"
 #include "main.h"
+
 
 /* Implement HTML5 fallback.
  * If HTML5 fallback is implemented and activated, the server should
@@ -36,7 +38,7 @@ int token_expiration_time = 24 * 60 * 60;
 char * server_root;
 
 
-/* thread function */
+/* thread function -- each thread handles one client */
 static void* work_it(void* arg) {
     int client_socket = ((int*)arg)[0];
 
@@ -64,7 +66,7 @@ server_loop(char *port_string)
         if (client_socket == -1)
             return;
 
-        // create thread to deal with transaction
+        // create thread to deal with client
         pthread_t newThread;
         int* client_socket_alloc = calloc(1, sizeof(int));
         client_socket_alloc[0] = client_socket;
@@ -72,6 +74,7 @@ server_loop(char *port_string)
         pthread_detach(newThread);
     }
 }
+
 
 static void
 usage(char * av0)
@@ -84,6 +87,7 @@ usage(char * av0)
         , av0);
     exit(EXIT_FAILURE);
 }
+
 
 int
 main(int ac, char *av[])

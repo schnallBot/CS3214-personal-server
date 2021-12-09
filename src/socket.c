@@ -1,11 +1,9 @@
-/*
- * Support functions for dealing with sockets.
- *
- * Note: these functions cannot be used out of the box. 
- * In particular, support for protocol independent programming
- * is not fully implemented.  See below.
- *
- * Written by G. Back for CS 3214 Spring 2018.
+/**
+ * Josh Ho (hojosh2000), Zachary Zawitoski (zachzaw); CS3214
+ * p4 -- personal server
+ * 
+ * This file contains functions that handle the socket side of the server.
+ * It supports both IPv4 and IPv6.
  */
 
 #include <sys/types.h>
@@ -25,12 +23,10 @@
 #include "socket.h"
 #include "main.h"
 
+
 /*
- * Find a suitable IPv4 address to bind to, create a socket, bind it,
+ * Find a suitable IPv6 or IPv4 address to bind to, create a socket, bind it,
  * invoke listen to get the socket ready for accepting clients.
- *
- * This function does not implement proper support for protocol-independent/
- * dual-stack binding.  Adding this is part of the assignment. 
  *
  * Returns -1 on error, setting errno.
  * Returns socket file descriptor otherwise.
@@ -53,6 +49,7 @@ socket_open_bind_listen(char * port_number_string, int backlog)
         return -1;
     }
 
+    // check for IPv6 first
     char printed_addr[1024];
     for (pinfo = info; pinfo; pinfo = pinfo->ai_next) {
         assert (pinfo->ai_protocol == IPPROTO_TCP);
@@ -70,8 +67,58 @@ socket_open_bind_listen(char * port_number_string, int backlog)
                            printed_addr);
         */
 
-        /* Skip any non-IPv4 addresses.  
-         * Adding support for protocol independence/IPv6 is part of the project.
+        /* Skip any non-IPv6 addresses.
+         */
+        if (pinfo->ai_family != AF_INET6)
+            continue;
+
+        int s = socket(pinfo->ai_family, pinfo->ai_socktype, pinfo->ai_protocol);
+        if (s == -1) {
+            perror("socket");
+            return -1;
+        }
+
+        // See https://stackoverflow.com/a/3233022 for a good explanation of what this does
+        int opt = 1;
+        setsockopt (s, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof (opt));
+
+        rc = bind(s, pinfo->ai_addr, pinfo->ai_addrlen);
+        if (rc == -1) {
+            perror("bind");
+            close(s);
+            return -1;
+        }
+
+        rc = listen(s, backlog);
+        if (rc == -1) {
+            perror("listen");
+            close(s);
+            return -1;
+        }
+
+        freeaddrinfo(info);
+        return s;
+    }
+
+    // then check for IPv4
+    char printed_addr2[1024];
+    for (pinfo = info; pinfo; pinfo = pinfo->ai_next) {
+        assert (pinfo->ai_protocol == IPPROTO_TCP);
+        int rc = getnameinfo(pinfo->ai_addr, pinfo->ai_addrlen,
+                             printed_addr2, sizeof printed_addr2, NULL, 0,
+                             NI_NUMERICHOST);
+        if (rc != 0) {
+            fprintf(stderr, "getnameinfo error: %s\n", gai_strerror(rc));
+            return -1;
+        }
+
+        /* Uncomment this to see the address returned
+        printf("%s: %s\n", pinfo->ai_family == AF_INET ? "AF_INET" :
+                           pinfo->ai_family == AF_INET6 ? "AF_INET6" : "?", 
+                           printed_addr2);
+        */
+
+        /* Skip any non-IPv4 addresses.
          */
         if (pinfo->ai_family != AF_INET)
             continue;
@@ -103,9 +150,12 @@ socket_open_bind_listen(char * port_number_string, int backlog)
         freeaddrinfo(info);
         return s;
     }
+
+    // failure
     fprintf(stderr, "No suitable address to bind port %s found\n", port_number_string);
     return -1;
 }
+
 
 /**
  * Accept a client, blocking if necessary.

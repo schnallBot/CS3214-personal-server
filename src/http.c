@@ -1,6 +1,9 @@
 /**
  * Josh Ho (hojosh2000), Zachary Zawitoski (zachzaw); CS3214
  * p4 -- personal server
+ * 
+ * This file contains functions that handle the HTTP side of the server.
+ * It supports both HTTP 1.0 and 1.1.
  */
 
 #include <sys/types.h>
@@ -23,6 +26,7 @@
 #include "bufio.h"
 #include "main.h"
 
+
 // Need macros here because of the sizeof
 #define CRLF "\r\n"
 #define CR "\r"
@@ -30,13 +34,11 @@
     (!strncasecmp(field_name, header, sizeof(header) - 1))
 
 
-
 // bad to store in code but for now whatever
 static const char* MY_USERNAME = "user0";
 static const char* MY_PASSWORD = "thepassword";
 static const char* MY_JWT_CODE = "secret sauce";  // for encoding JWT
 static const char* COOKIE_NAME = "auth_token";  // default cookie name
-
 
 
 /* Parse HTTP request line, setting req_method, req_path, and req_version. */
@@ -82,6 +84,7 @@ http_parse_request(struct http_transaction *ta)
 
     return true;
 }
+
 
 /* Process HTTP headers. */
 static bool
@@ -147,7 +150,9 @@ http_process_headers(struct http_transaction *ta)
     }
 }
 
+
 const int MAX_HEADER_LEN = 2048;
+
 
 /* add a formatted header to the response buffer. */
 void 
@@ -167,6 +172,7 @@ http_add_header(buffer_t * resp, char* key, char* fmt, ...)
     buffer_appends(resp, "\r\n");
 }
 
+
 /* add a content-length header. */
 static void
 add_content_length(buffer_t *res, size_t len)
@@ -174,12 +180,12 @@ add_content_length(buffer_t *res, size_t len)
     http_add_header(res, "Content-Length", "%ld", len);
 }
 
+
 /* start the response by writing the first line of the response 
  * to the response buffer.  Used in send_response_header */
 static void
 start_response(struct http_transaction * ta, buffer_t *res)
 {
-
     // append the right http version
     if (ta->req_version == HTTP_1_1)
         buffer_appends(res, "HTTP/1.1 ");
@@ -225,6 +231,7 @@ start_response(struct http_transaction * ta, buffer_t *res)
     buffer_appends(res, CRLF);
 }
 
+
 /* Send response headers to client */
 static bool
 send_response_header(struct http_transaction *ta)
@@ -244,6 +251,7 @@ send_response_header(struct http_transaction *ta)
     return true;
 }
 
+
 /* Send a full response to client with the content in resp_body. */
 static bool
 send_response(struct http_transaction *ta)
@@ -257,7 +265,9 @@ send_response(struct http_transaction *ta)
     return bufio_sendbuffer(ta->client->bufio, &ta->resp_body) != -1;
 }
 
+
 const int MAX_ERROR_LEN = 2048;
+
 
 /* Send an error response. */
 static bool
@@ -275,6 +285,7 @@ send_error(struct http_transaction * ta, enum http_response_status status, const
     return send_response(ta);
 }
 
+
 /* Send Not Found response. */
 static bool
 send_not_found(struct http_transaction *ta)
@@ -282,6 +293,7 @@ send_not_found(struct http_transaction *ta)
     return send_error(ta, HTTP_NOT_FOUND, "File %s not found", 
         bufio_offset2ptr(ta->client->bufio, ta->req_path));
 }
+
 
 /* A start at assigning an appropriate mime type.  Real-world 
  * servers use more extensive lists such as /etc/mime.types
@@ -313,6 +325,7 @@ guess_mime_type(char *filename)
 
     return "text/plain";
 }
+
 
 /**
  * Sends the fallback html in the event of failure.
@@ -360,6 +373,7 @@ out:
     close(filefd);
     return success;
 }
+
 
 /* Handle HTTP transaction for static AND video files. */
 static bool
@@ -553,6 +567,7 @@ handle_api_login(struct http_transaction *ta)
     }
 }
 
+
 /* Handle calls to GET /api/video. */
 static bool
 handle_api_video(struct http_transaction *ta, char *basedir)
@@ -595,6 +610,7 @@ handle_api_video(struct http_transaction *ta, char *basedir)
     return success;
 }
 
+
 /* Handle calls to /api. */
 static bool
 handle_api(struct http_transaction *ta, char* basedir)
@@ -609,6 +625,7 @@ handle_api(struct http_transaction *ta, char* basedir)
     // unsupported
     return send_not_found(ta);
 }
+
 
 /* Handle calls to GET private/... */
 static bool
@@ -639,13 +656,14 @@ handle_private(struct http_transaction *ta, char *basedir)
             currCookie = strtok_r(NULL, "; ", &endptr);
             continue;
         }
-        // valid cookie! --> return client claims
+        // valid cookie! --> return requested asset
         return handle_static_vid_asset(ta, basedir);
     }
 
     // no valid cookie...
     return send_error(ta, HTTP_PERMISSION_DENIED, "Permission denied.");
 }
+
 
 /* Set up an http client, associating it with a bufio buffer. */
 void 
@@ -654,6 +672,7 @@ http_setup_client(struct http_client *self, struct bufio *bufio)
     self->bufio = bufio;
 }
 
+
 /* Handle a single HTTP transaction.  Returns true on success. */
 bool
 http_handle_transaction(struct http_client *self)
@@ -661,8 +680,8 @@ http_handle_transaction(struct http_client *self)
     struct http_transaction ta;
     bool rc;
 
+    // handle transactions while keep-alive is specified
     do {
-        // struct http_transaction ta;
         memset(&ta, 0, sizeof ta);
         ta.client = self;
 
@@ -693,7 +712,7 @@ http_handle_transaction(struct http_client *self)
         }
 
         buffer_init(&ta.resp_headers, 1024);
-        http_add_header(&ta.resp_headers, "Server", "CS3214-Personal-Server"); // Custom server name
+        http_add_header(&ta.resp_headers, "Server", "SSSSS-Squad-Server"); // Custom server name
         buffer_init(&ta.resp_body, 0);
 
         rc = false;
