@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <signal.h>
+#include <pthread.h>
 #include "buffer.h"
 #include "hexdump.h"
 #include "http.h"
@@ -34,6 +35,21 @@ int token_expiration_time = 24 * 60 * 60;
 /** root from which static files are served */
 char * server_root;
 
+
+/* thread function */
+static void* work_it(void* arg) {
+    int client_socket = ((int*)arg)[0];
+
+    struct http_client client;
+    http_setup_client(&client, bufio_create(client_socket));
+    http_handle_transaction(&client);
+    bufio_close(client.bufio);
+    free(arg);
+
+    return NULL;
+}
+
+
 /*
  * A non-concurrent, iterative server that serves one client at a time.
  * For each client, it handles exactly 1 HTTP transaction.
@@ -48,10 +64,12 @@ server_loop(char *port_string)
         if (client_socket == -1)
             return;
 
-        struct http_client client;
-        http_setup_client(&client, bufio_create(client_socket));
-        http_handle_transaction(&client);
-        bufio_close(client.bufio);
+        // create thread to deal with transaction
+        pthread_t newThread;
+        int* client_socket_alloc = calloc(1, sizeof(int));
+        client_socket_alloc[0] = client_socket;
+        pthread_create(&newThread, NULL, work_it, client_socket_alloc);
+        pthread_detach(newThread);
     }
 }
 

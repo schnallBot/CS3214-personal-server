@@ -35,6 +35,7 @@
 static const char* MY_USERNAME = "user0";
 static const char* MY_PASSWORD = "thepassword";
 static const char* MY_JWT_CODE = "secret sauce";  // for encoding JWT
+static const char* COOKIE_NAME = "auth_token";  // default cookie name
 
 
 
@@ -125,10 +126,7 @@ http_process_headers(struct http_transaction *ta)
 
         // cookie header
         if (!strcasecmp(field_name, "Cookie")) {
-            char* endptr2;
-            strtok_r(field_value, "=", &endptr2);
-            char* clientCookie = endptr2;
-            ta->req_cookie = clientCookie;
+            ta->req_cookies = field_value;  // store the entire cookie / list of cookies
         }
 
         // range header
@@ -489,7 +487,7 @@ handle_api_login(struct http_transaction *ta)
 
         // response header stuff
         ta->resp_status = HTTP_OK;
-        http_add_header(&ta->resp_headers, "Set-Cookie", "auth_token=%s; Path=/", encoded);  // this is the cookie
+        http_add_header(&ta->resp_headers, "Set-Cookie", "%s=%s; Path=/", COOKIE_NAME, encoded);  // this is the cookie
         http_add_header(&ta->resp_headers, "Content-Type", "application/json");
 
         // add JWT to response body
@@ -509,34 +507,44 @@ handle_api_login(struct http_transaction *ta)
         ta->resp_status = HTTP_OK;
         http_add_header(&ta->resp_headers, "Content-Type", "application/json");
 
-        // check for existence of cookies
-        if (ta->req_cookie == NULL) {
+        // first check for existence of cookies
+        if (ta->req_cookies == NULL) {
             buffer_appends(&ta->resp_body, "{}");
             return send_response(ta);
         }
 
-        // get client cookie and validate it
-        char* clientCookie = ta->req_cookie;
+        // loop thru all client cookies (separated by "; ")
         jwt_t* clientCookieDecoded;
-        if (jwt_decode(&clientCookieDecoded, clientCookie, (unsigned char*)MY_JWT_CODE, strlen(MY_JWT_CODE))) {
-            buffer_appends(&ta->resp_body, "{}");
-            return send_response(ta);
-        }
-        // check for expired token
-        time_t now = time(NULL);
-        time_t exp = jwt_get_grant_int(clientCookieDecoded, "exp");
-        if (now > exp) {
-            buffer_appends(&ta->resp_body, "{}");
-            return send_response(ta);
+        char* clientCookies = ta->req_cookies;
+        char* endptr;
+        char* currCookie = strtok_r(clientCookies, "; ", &endptr);
+        while (currCookie != NULL) {
+            char* endptr2;
+            char* clientCookieName = strtok_r(currCookie, "=", &endptr2);
+            char* clientCookie = endptr2;
+            // check for correct cookie name and JWT
+            if (strcmp(clientCookieName, COOKIE_NAME) || jwt_decode(&clientCookieDecoded, clientCookie, (unsigned char*)MY_JWT_CODE, strlen(MY_JWT_CODE))) {
+                currCookie = strtok_r(NULL, "; ", &endptr);
+                continue;
+            }
+            // check for expired token
+            time_t now = time(NULL);
+            time_t exp = jwt_get_grant_int(clientCookieDecoded, "exp");
+            if (now > exp) {
+                currCookie = strtok_r(NULL, "; ", &endptr);
+                continue;
+            }
+            // valid cookie! --> return client claims
+            char* grants = jwt_get_grants_json(clientCookieDecoded, NULL);
+            buffer_appends(&ta->resp_body, grants);
+            bool success = send_response(ta);
+            free(grants);
+            return success;
         }
 
-        // valid cookie! --> return client claims
-        char* grants = jwt_get_grants_json(clientCookieDecoded, NULL);
-        buffer_appends(&ta->resp_body, grants);
-        bool success = send_response(ta);
-
-        free(grants);
-        return success;
+        // no valid cookie...
+        buffer_appends(&ta->resp_body, "{}");
+        return send_response(ta);
     }
 
     // case 3: neither (invalid)
@@ -593,36 +601,50 @@ handle_api(struct http_transaction *ta, char* basedir)
 {
     char *req_path = bufio_offset2ptr(ta->client->bufio, ta->req_path);
     // /api/login
-    if (strstr(req_path, "/login"))
+    if (!strcmp(req_path, "/api/login"))
         return handle_api_login(ta);
     // /api/video
-    if (strstr(req_path, "/video"))
+    if (!strcmp(req_path, "/api/video"))
         return handle_api_video(ta, basedir);
     // unsupported
-    return send_error(ta, HTTP_NOT_IMPLEMENTED, "Not implemented.");
+    return send_not_found(ta);
 }
 
 /* Handle calls to GET private/... */
 static bool
 handle_private(struct http_transaction *ta, char *basedir)
 {
-    // check for existence of cookies
-    if (ta->req_cookie == NULL)
+    // first check for existence of cookies
+    if (ta->req_cookies == NULL)
         return send_error(ta, HTTP_PERMISSION_DENIED, "Permission denied.");
 
-    // get client cookie and validate it
-    char* clientCookie = ta->req_cookie;
+    // loop thru all client cookies (separated by "; ")
     jwt_t* clientCookieDecoded;
-    if (jwt_decode(&clientCookieDecoded, clientCookie, (unsigned char*)MY_JWT_CODE, strlen(MY_JWT_CODE)))
-        return send_error(ta, HTTP_PERMISSION_DENIED, "Permission denied.");
-    // check for expired token
-    time_t now = time(NULL);
-    time_t exp = jwt_get_grant_int(clientCookieDecoded, "exp");
-    if (now > exp)
-        return send_error(ta, HTTP_PERMISSION_DENIED, "Permission denied.");
+    char* clientCookies = ta->req_cookies;
+    char* endptr;
+    char* currCookie = strtok_r(clientCookies, "; ", &endptr);
+    while (currCookie != NULL) {
+        char* endptr2;
+        char* clientCookieName = strtok_r(currCookie, "=", &endptr2);
+        char* clientCookie = endptr2;
+        // check for correct cookie name and JWT
+        if (strcmp(clientCookieName, COOKIE_NAME) || jwt_decode(&clientCookieDecoded, clientCookie, (unsigned char*)MY_JWT_CODE, strlen(MY_JWT_CODE))) {
+            currCookie = strtok_r(NULL, "; ", &endptr);
+            continue;
+        }
+        // check for expired token
+        time_t now = time(NULL);
+        time_t exp = jwt_get_grant_int(clientCookieDecoded, "exp");
+        if (now > exp) {
+            currCookie = strtok_r(NULL, "; ", &endptr);
+            continue;
+        }
+        // valid cookie! --> return client claims
+        return handle_static_vid_asset(ta, basedir);
+    }
 
-    // valid cookie! --> give client the static/video file
-    return handle_static_vid_asset(ta, basedir);
+    // no valid cookie...
+    return send_error(ta, HTTP_PERMISSION_DENIED, "Permission denied.");
 }
 
 /* Set up an http client, associating it with a bufio buffer. */
@@ -644,7 +666,7 @@ http_handle_transaction(struct http_client *self)
         memset(&ta, 0, sizeof ta);
         ta.client = self;
 
-        ta.req_cookie = NULL;  // no cookies by default
+        ta.req_cookies = NULL;    // no cookies by default
         ta.req_range_start = -1;  // no range by default
         ta.req_range_end = -1;    // ^
 

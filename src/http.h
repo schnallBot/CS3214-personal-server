@@ -40,10 +40,10 @@ struct http_transaction {
     size_t req_path;        // expressed as offset into the client's bufio.
     size_t req_body;        // ditto
     int req_content_len;    // content length of request body
-    char* req_cookie;  // NEW!!!
+    char* req_cookies;      // NEW!!
     off_t req_range_start;  // NEW!!
-    off_t req_range_end;  // NEW!!
-    bool req_keep_alive;  // NEW!!!
+    off_t req_range_end;    // NEW!!
+    bool req_keep_alive;    // NEW!!
 
 
     /* response related fields */
