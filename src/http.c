@@ -308,6 +308,9 @@ guess_mime_type(char *filename)
     if (!strcasecmp(suffix, ".html"))
         return "text/html";
 
+    if (!strcasecmp(suffix, ".css"))
+        return "text/css";
+
     if (!strcasecmp(suffix, ".gif"))
         return "image/gif";
 
@@ -317,8 +320,11 @@ guess_mime_type(char *filename)
     if (!strcasecmp(suffix, ".jpg"))
         return "image/jpeg";
 
+    if (!strcasecmp(suffix, ".svg"))
+        return "image/svg";
+
     if (!strcasecmp(suffix, ".js"))
-        return "text/javascript";
+        return "application/javascript";
 
     if (!strcasecmp(suffix, ".mp4"))
         return "video/mp4";
@@ -434,8 +440,10 @@ handle_static_vid_asset(struct http_transaction *ta, char *basedir)
         if (ta->req_range_start != -1) {
             ta->resp_status = HTTP_PARTIAL_CONTENT;  // change status
             from = ta->req_range_start;
-            if (ta->req_range_end != -1)
-                to = ta->req_range_end;
+        }
+        if (ta->req_range_end != -1) {
+            ta->resp_status = HTTP_PARTIAL_CONTENT;  // change status
+            to = ta->req_range_end;
         }
         http_add_header(&ta->resp_headers, "Content-Range", "bytes %ld-%ld/%ld", from, to, st.st_size);  // content-range header
     }
@@ -592,7 +600,9 @@ handle_api_video(struct http_transaction *ta, char *basedir)
         if (dp->d_type == DT_REG && strstr(dp->d_name, ".mp4")) {
             json_t* newVid = json_object();
             struct stat st;
-            stat(dp->d_name, &st);
+            char fname[PATH_MAX];
+            snprintf(fname, sizeof fname, "%s/%s", basedir, dp->d_name);
+            stat(fname, &st);
             json_object_set(newVid, "size", json_integer(st.st_size));  // set vid size
             json_object_set(newVid, "name", json_string(dp->d_name));  // set vid name
             json_array_append(vidsArray, newVid);  // add to array
