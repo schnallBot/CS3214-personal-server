@@ -321,10 +321,13 @@ guess_mime_type(char *filename)
         return "image/jpeg";
 
     if (!strcasecmp(suffix, ".svg"))
-        return "image/svg";
+        return "image/svg+xml";
 
     if (!strcasecmp(suffix, ".js"))
         return "application/javascript";
+        
+    if (!strcasecmp(suffix, ".json"))
+        return "application/json";
 
     if (!strcasecmp(suffix, ".mp4"))
         return "video/mp4";
@@ -338,47 +341,47 @@ guess_mime_type(char *filename)
  * It is highly tailored to its current params, so if any changes are
  * made to the html file itself, be sure to change the character counts accordingly.
  */
-static bool
-send_fallback(struct http_transaction *ta, char* basedir)
-{
-    // Determine file size
-    char fname[PATH_MAX];
+// static bool
+// send_fallback(struct http_transaction *ta, char* basedir)
+// {
+//     // Determine file size
+//     char fname[PATH_MAX];
 
-    snprintf(fname, sizeof fname, "%s%s", basedir, "/index.html");
+//     snprintf(fname, sizeof fname, "%s%s", basedir, "/index.html");
 
-    printf("fallback path: %s\n", fname);
-    struct stat st;
-    int rc = stat(fname, &st);
-    if (rc == -1)
-        return send_error(ta, HTTP_INTERNAL_ERROR, "Could not stat file.");
+//     printf("fallback path: %s\n", fname);
+//     struct stat st;
+//     int rc = stat(fname, &st);
+//     if (rc == -1)
+//         return send_error(ta, HTTP_INTERNAL_ERROR, "Could not stat file.");
 
-    ta->resp_status = HTTP_OK;
-    int filefd = open(fname, O_RDONLY);
+//     ta->resp_status = HTTP_OK;
+//     int filefd = open(fname, O_RDONLY);
 
-    if (filefd == -1) {
-        return send_not_found(ta);
-    }
+//     if (filefd == -1) {
+//         return send_not_found(ta);
+//     }
 
-    ta->resp_status = HTTP_OK;
-    http_add_header(&ta->resp_headers, "Content-Type", "%s", guess_mime_type(fname));
-    off_t from = 0, to = st.st_size - 1;
+//     ta->resp_status = HTTP_OK;
+//     http_add_header(&ta->resp_headers, "Content-Type", "%s", guess_mime_type(fname));
+//     off_t from = 0, to = st.st_size - 1;
 
-    off_t content_length = to + 1 - from;
-    add_content_length(&ta->resp_headers, content_length);
+//     off_t content_length = to + 1 - from;
+//     add_content_length(&ta->resp_headers, content_length);
 
-    // Extracted from the static file code
-    bool success = send_response_header(ta);
-    if (!success)
-        goto out;
+//     // Extracted from the static file code
+//     bool success = send_response_header(ta);
+//     if (!success)
+//         goto out;
 
-    // sendfile may send fewer bytes than requested, hence the loop
-    while (success && from <= to)
-        success = bufio_sendfile(ta->client->bufio, filefd, &from, to + 1 - from) > 0;
+//     // sendfile may send fewer bytes than requested, hence the loop
+//     while (success && from <= to)
+//         success = bufio_sendfile(ta->client->bufio, filefd, &from, to + 1 - from) > 0;
 
-out:
-    close(filefd);
-    return success;
-}
+// out:
+//     close(filefd);
+//     return success;
+// }
 
 
 /* Handle HTTP transaction for static AND video files. */
@@ -388,26 +391,30 @@ handle_static_vid_asset(struct http_transaction *ta, char *basedir)
     char fname[PATH_MAX];
 
     char *req_path = bufio_offset2ptr(ta->client->bufio, ta->req_path);
+
+    if (!strcmp(req_path, "/"))
+        snprintf(fname, sizeof fname, "%s%s", basedir, "/index.html");
+    else
     // The code below is vulnerable to an attack.  Can you see
     // which?  Fix it to avoid indirect object reference (IDOR) attacks.
-    snprintf(fname, sizeof fname, "%s%s", basedir, req_path);
+        snprintf(fname, sizeof fname, "%s%s", basedir, req_path);
+
     // If a bad sequence was found
     if (strstr(req_path, ".."))
     {
         // printf("ERROR: User attempted to use special path character sequences."); // Error reporting for server.
         // return send_not_found(ta); // Send not found.
-        if (html5_fallback)
-            return send_fallback(ta, basedir);
-        else
-            return send_not_found(ta);
+        return send_not_found(ta);
     }
 
     if (access(fname, R_OK)) {
         if (errno == EACCES)
             return send_error(ta, HTTP_PERMISSION_DENIED, "Permission denied.");
         else {
-            if (html5_fallback)
-                return send_fallback(ta, basedir);
+            if (html5_fallback) {
+                memset(fname, 0, sizeof fname);
+                snprintf(fname, sizeof fname, "%s%s", basedir, "/index.html");
+            }
             else
                 return send_not_found(ta);
         }
@@ -423,8 +430,11 @@ handle_static_vid_asset(struct http_transaction *ta, char *basedir)
     
     int filefd = open(fname, O_RDONLY); // File reading seems to be bugged here... why?
     if (filefd == -1) {
-        if (html5_fallback)
-            return send_fallback(ta, basedir);
+        if (html5_fallback) {
+            memset(fname, 0, sizeof fname);
+            snprintf(fname, sizeof fname, "%s%s", basedir, "/index.html");
+            filefd = open(fname, O_RDONLY);
+        }
         else
             return send_not_found(ta);
     }
